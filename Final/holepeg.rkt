@@ -1,0 +1,188 @@
+#lang racket
+
+#|
+This program solves the hole and peg puzzle. It can handle 
+both 10 hole and 15 hole boards. You can also specify a specific goal
+arrangement or just a 1 for having only one peg remaining in any position.
+To run the program use:
+
+(pegSolver board goal)
+
+where board is a the starting configuration and goal is either a 1 or 
+a specific configuration.
+Example using predefined board:
+
+(pegSolver start-state3 1)
+
+Not all of the 10 hole board starting configuration have a solution,
+but all of the 15 hole boards do.
+For both puzzle board sizes not every ending configuration is reachable
+from every begining configuration.
+|#
+
+(require (lib "trace.ss"))
+(struct puzzle_node (state action pred g h f) #:transparent #:mutable)
+ 
+;;Heuristic function is the number of claused left to infer.
+(define build_node
+  (lambda (s a p g heuristic)
+    (puzzle_node s a p g (heuristic s) (+ g (heuristic s)))))
+
+(define start-time 0)
+
+(require data/heap)
+(define mysort
+  (lambda (puznode1 puznode2)
+    (<= (puzzle_node-f puznode1) (puzzle_node-f puznode2))))
+
+(define A*-graph-search
+  (lambda ( start goal? moves heuristic)
+    (define closed (make-hash))
+    (define open (make-heap mysort))
+    (set! start-time (current-seconds))
+    (define startnode
+      (build_node start 'start '() 0 heuristic))
+
+    (heap-add! open startnode)
+    (hash-set! closed (puzzle_node-state startnode) 0)
+    (define (loop)
+      (if(<(heap-count open)1)
+         (begin
+           (set! start-time (- (current-seconds) start-time))
+           (printf "No solution can be found. Runtime: ~a seconds." start-time))
+         (let((n (heap-min open)))
+           (heap-remove-min! open)
+           (hash-set! closed (puzzle_node-state n) '())
+           (cond((goal?(puzzle_node-state n))
+                 (reverse(path n)))
+                (else (for-each (lambda (child)
+                                  (add_to_open child open closed))
+                                (moves n))
+                      (loop) )))))
+    (loop)))
+
+;;Show steps to get from start to goal.
+(define path
+  (lambda (node)
+    (if (equal? node '()) '()
+        (cons (list (puzzle_node-action node)
+                    (puzzle_node-state node)
+                    (puzzle_node-g node)
+                    (puzzle_node-h node)
+                    (puzzle_node-f node))
+              (path (puzzle_node-pred node))))))
+
+;;Takes a node and adds it to the open list 
+;;if not already in graph or open list.
+(define add_to_open
+  (lambda (node open closed)
+   (cond
+      ((equal? node '()) '())
+      (else
+       (define cur_state (puzzle_node-state node))
+       (cond
+         ((not (hash-has-key? closed cur_state))
+          (begin
+            (heap-add! open node)
+            (hash-set! closed cur_state node)))
+         ((equal? (hash-ref closed cur_state) '()) '())
+         ((< (puzzle_node-g node) (puzzle_node-g (hash-ref closed cur_state)))
+          (begin
+            (set-puzzle_node-action! (hash-ref closed cur_state) (puzzle_node-action node))
+            (set-puzzle_node-pred! (hash-ref closed cur_state) (puzzle_node-pred node))
+            (set-puzzle_node-g! (hash-ref closed cur_state) (puzzle_node-g node))
+            (set-puzzle_node-f! (hash-ref closed cur_state) (puzzle_node-f node))
+            ;;need to add and remove to get the heap to update, using built in heap.
+            (heap-add! open (puzzle_node '(()()()) '() '() 0 0 0))
+            (heap-remove-min! open))))))))
+
+;;Some starting state for testing.
+(define start-state1 '((1)(0 1)(1 1 1)(1 1 1 1)))
+(define start-state2 '((0)(1 1)(1 1 1)(1 1 1 1)))
+(define start-state3 '((0)(1 1)(1 1 1)(1 1 1 1)(1 1 1 1 1)))
+(define start-state4 '((1)(1 1)(1 1 1)(1 1 1 1)(1 1 0 1 1)))
+
+;;Some goal states for testing.
+(define goal1 '((0)(0 0)(0 1 0)(0 0 0 0)))
+(define goal2 '((0)(0 0)(0 1 0)(0 0 0 0)(0 0 0 0 0)))
+(define goal3 '((0)(0 0)(0 0 0)(0 0 0 0)(0 0 1 0 0)))
+(define goal4 '((0)(0 0)(0 0 0)(0 0 0 1)(0 0 0 0 0)))
+
+;;List of all possible moves on the board
+(define 10movesList '((0 1 3)(0 2 5)(1 3 6)(1 4 8)(2 4 7)(2 5 9)(3 1 0)(3 4 5)
+                    (5 2 0)(5 4 3)(6 3 1)(6 7 8)(7 4 2)(7 8 9)(8 4 1)(8 7 6)
+                    (9 5 2)(9 8 7)))
+(define 15movesList (append 10movesList '((3 6 10)(3 7 12)(4 7 11)(4 8 13)(5 8 12)(5 9 14)(10 6 3)(10 11 12)
+                      (11 7 4)(11 12 13)(12 7 3)(12 8 5)(12 11 10)(12 13 14)(13 8 4)(13 12 11)
+                      (14 9 5)(14 13 12))))
+;;Returns a list of indexs were pegs are located on the puzzle.
+(define positions
+  (lambda (state)
+    (define temp-state (list->vector (flatten state)))
+    (define (loop temp-state)
+      (cond
+        ((not(vector-member 1 temp-state)) '())
+        (else
+         (define onepos (vector-member 1 temp-state))
+         (vector-set! temp-state (vector-member 1 temp-state) 0)
+         (append (list onepos) (loop temp-state)))))
+    (loop temp-state)))
+
+ ;;Returns a list of valid moves given a state.
+(define pos-moves
+  (lambda (state)
+    (if (equal? (length (flatten state)) 10)
+        (filter (λ(elm) (valid-move elm state)) (append-map (λ(i) (append-map (λ(m) (if (equal? (car m) i) (list m) '())) 10movesList)) (positions state)))
+        (filter (λ(elm) (valid-move elm state)) (append-map (λ(i) (append-map (λ(m) (if (equal? (car m) i) (list m) '())) 15movesList)) (positions state))))))
+
+;;Test if a move is valid given a state and a move.
+(define valid-move
+  (lambda (move state)
+    (cond
+      ((equal? (list-ref (flatten state) (car move)) 0) #f)
+      ((equal? (list-ref (flatten state) (cadr move)) 0) #f)
+      ((equal? (list-ref (flatten state) (caddr move)) 1) #f)
+     (else #t))))
+
+;;Return a new state after applying a valid move.
+(define new-state
+  (lambda (state move)
+    (define temp-state (list->vector (flatten state)))
+    (vector-set! temp-state (car move) 0)
+    (vector-set! temp-state (cadr move) 0)
+    (vector-set! temp-state (caddr move) 1)
+    (define bottom
+      (if (equal? (vector-length temp-state) 15) (list (map (λ(p) (vector-ref temp-state p)) '(10 11 12 13 14))) '()))
+    (append
+     (list (list (vector-ref temp-state 0))
+          (map (λ(p) (vector-ref temp-state p)) '(1 2))
+          (map (λ(p) (vector-ref temp-state p)) '(3 4 5))
+          (map (λ(p) (vector-ref temp-state p)) '(6 7 8 9)))
+     bottom)))
+
+;;Peg and Hole puzzle solver which used A*
+(define(pegSolver board goal)
+  (define(peg-moves node)
+    (map (λ(act) (build_node (new-state (puzzle_node-state node) act) act node (+ (puzzle_node-g node) 1) peg-heuristic)) (pos-moves (puzzle_node-state node))))
+  (define peg-goal?
+    (lambda (state)
+      (cond
+        ((equal? goal 1) (equal? (foldr + 0 (flatten state)) 1))
+       (else
+        (equal? state goal)))))
+  (define peg-heuristic 
+    (lambda (state)
+      (foldr + 0 (flatten state))))
+  (time(A*-graph-search board peg-goal? peg-moves peg-heuristic)))
+
+
+(define(peg-moves node)
+    (map (λ(act) (build_node (new-state (puzzle_node-state node) act) act node (+ (puzzle_node-g node) 1) peg-heuristic)) (pos-moves (puzzle_node-state node))))
+  (define peg-goal?
+    (lambda (state)
+      (equal? (foldr + 0 (flatten state)) 1)))
+  (define peg-heuristic 
+    (lambda (state)
+      (foldr + 0 (flatten state))))
+  
+  (trace )
